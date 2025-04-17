@@ -728,40 +728,45 @@ in
         };
       };
 
-      launchd.agents =
-        let
-          # agent `syncthing` uses `${syncthing_dir}/${watch_file}` to notify agent `syncthing-init`
-          watch_file = ".launchd_update_config";
-        in
-        {
-          syncthing = {
-            enable = true;
-            config = {
-              ProgramArguments = [
-                "${pkgs.writers.writeBash "syncthing-wrapper" ''
-                  ${copyKeys}                               # simulate systemd's `syncthing-init.Service.ExecStartPre`
-                  touch "${syncthing_dir}/${watch_file}"    # notify syncthing-init agent
-                  exec ${lib.escapeShellArgs syncthingArgs}
-                ''}"
-              ];
-              KeepAlive = {
-                Crashed = true;
-                SuccessfulExit = false;
-              };
-              ProcessType = "Background";
+      launchd.agents = {
+        syncthing = {
+          enable = true;
+          config = {
+            ProgramArguments = [
+              "${pkgs.writers.writeBash "syncthing-wrapper" ''
+                ${copyKeys}    # simulate systemd's `syncthing-init.Service.ExecStartPre`
+                exec ${lib.escapeShellArgs syncthingArgs}
+              ''}"
+            ];
+            KeepAlive = {
+              Crashed = true;
+              SuccessfulExit = false;
             };
-          };
-
-          syncthing-init = {
-            enable = cleanedConfig != { };
-            config = {
-              ProgramArguments = [ "${updateConfig}" ];
-              WatchPaths = [
-                "${config.home.homeDirectory}/Library/Application Support/Syncthing/${watch_file}"
-              ];
-            };
+            ProcessType = "Background";
           };
         };
+
+        # Idially this should be started **after** the syncthing agent. The
+        # systemd service versions of these agents handle this via the
+        # `Requires` and `After` attribute. Launchd is missing a reliable way
+        # to order agents. One can achieve similar things via, e.g.,
+        # `WatchPaths` but this is known to be very unreliable.
+        # Instead, we simply start the syncthing-init agent as a one-shot
+        # process and rely on the script's while-loop to wait for the
+        # syncthing agent.
+        #
+        # TODO: Maybe add a timeout to the syncthing-init agent's script, to
+        #       ensure that the script does not run indefenitely if there is
+        #       a problem with the syncthing agent.
+        syncthing-init = {
+          enable = cleanedConfig != { };
+          config = {
+            ProgramArguments = [ "${updateConfig}" ];
+            ProcessType = "Background";
+            RunAtLoad = true;
+          };
+        };
+      };
     })
 
     (lib.mkIf (lib.isAttrs cfg.tray && cfg.tray.enable) {
